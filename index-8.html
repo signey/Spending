@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>Sổ Chi Tiêu Gia Đình</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Be+Vietnam+Pro:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root{
+    --canvas:#F4EFE4;
+    --surface:#FCFAF3;
+    --surface-2:#F0EADB;
+    --ink:#20291F;
+    --ink-soft:#6A6B5E;
+    --ink-faint:#9A9A8B;
+    --line:#E2DBC9;
+    --pine:#1E4A3B;
+    --pine-deep:#173A2E;
+    --pine-soft:#E3ECE4;
+    --brass:#A9822F;
+    --brass-soft:#EFE3C4;
+    --clay:#AF4327;
+    --clay-soft:#F3E0D6;
+  }
+  *{ -webkit-tap-highlight-color: transparent; }
+  html,body{ background:var(--canvas); }
+  body{ font-family:'Be Vietnam Pro',sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
+  .font-display{ font-family:'Fraunces',serif; font-optical-sizing:auto; }
+  .font-mono{ font-family:'IBM Plex Mono',monospace; font-variant-numeric: tabular-nums; letter-spacing:-0.02em; }
+  .canvas{ background:var(--canvas); }
+  .surface{ background:var(--surface); }
+  .card{ background:var(--surface); border:1px solid var(--line); border-radius:20px; }
+  .card-flat{ background:var(--surface); border-radius:20px; }
+  .hairline{ height:1px; background:var(--line); }
+  .brass-rule{ height:2px; background:linear-gradient(90deg, var(--brass) 0%, rgba(169,130,47,0.15) 100%); border-radius:2px; }
+  .leader{ flex:1; margin:0 10px; border-bottom:1.5px dotted rgba(32,41,31,0.22); min-width:14px; transform:translateY(-5px); }
+  ::-webkit-scrollbar{ width:0; height:0; }
+  .press{ transition: transform .12s ease, background-color .15s ease, opacity .15s ease; }
+  .press:active{ transform:scale(0.97); }
+  input,select,textarea{ font-family:inherit; }
+  input:focus, select:focus, textarea:focus{ outline:none; border-color:var(--pine); box-shadow:0 0 0 3px rgba(30,74,59,0.12); }
+  .field{ width:100%; padding:13px 14px; border-radius:14px; border:1px solid var(--line); background:#fff; color:var(--ink); font-size:15px; transition: border-color .15s, box-shadow .15s; }
+  .field::placeholder{ color:var(--ink-faint); }
+  .label{ font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink-soft); }
+  @keyframes riseIn{ from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:translateY(0);} }
+  @keyframes fadeIn{ from{opacity:0;} to{opacity:1;} }
+  .rise{ animation: riseIn .28s cubic-bezier(0.22,1,0.36,1) both; }
+  .fade{ animation: fadeIn .2s ease both; }
+  @media (prefers-reduced-motion: reduce){ .rise,.fade{ animation:none; } .press{ transition:none; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "https://esm.sh/react@18.2.0";
+import { createRoot } from "https://esm.sh/react-dom@18.2.0/client";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getAuth, signInAnonymously, onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {
+  getDatabase, ref, get, set, update, remove, onValue, push, child
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+const h = React.createElement;
+
+/* ---------------- helpers ---------------- */
+
+function formatVND(n){
+  const num = Math.round(Number(n)||0);
+  const s = Math.abs(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return (num<0?"-":"") + s + "\u2009\u20AB";
+}
+function formatPlain(n){
+  const num = Math.round(Number(n)||0);
+  return Math.abs(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+function parseAmountInput(str){
+  const digits = String(str).replace(/[^\d]/g,"");
+  return digits ? parseInt(digits,10) : 0;
+}
+function todayKey(){
+  const d = new Date();
+  const p = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
+function monthKeyOf(dayKey){ return dayKey ? dayKey.slice(0,7) : ""; }
+function monthLabel(monthKey){
+  const [y,m] = monthKey.split("-").map(Number);
+  return `Tháng ${m} · ${y}`;
+}
+function shiftMonthKey(monthKey, delta){
+  let [y,m] = monthKey.split("-").map(Number);
+  m += delta;
+  while(m>12){ m-=12; y+=1; }
+  while(m<1){ m+=12; y-=1; }
+  return `${y}-${String(m).padStart(2,"0")}`;
+}
+function dateLabel(dayKey){
+  const [y,m,d] = dayKey.split("-").map(Number);
+  return `${String(d).padStart(2,"0")}/${String(m).padStart(2,"0")}`;
+}
+const WEEKDAYS = ["Chủ Nhật","Thứ Hai","Thứ Ba","Thứ Tư","Thứ Năm","Thứ Sáu","Thứ Bảy"];
+function friendlyDay(dayKey){
+  const t = todayKey();
+  if(dayKey === t) return "Hôm nay";
+  const [ty,tm,td] = t.split("-").map(Number);
+  const y = new Date(Date.UTC(ty,tm-1,td)); y.setUTCDate(y.getUTCDate()-1);
+  const p = n => String(n).padStart(2,"0");
+  const yKey = `${y.getUTCFullYear()}-${p(y.getUTCMonth()+1)}-${p(y.getUTCDate())}`;
+  if(dayKey === yKey) return "Hôm qua";
+  const [Y,M,D] = dayKey.split("-").map(Number);
+  const wd = new Date(Date.UTC(Y,M-1,D)).getUTCDay();
+  return `${WEEKDAYS[wd]}, ${String(D).padStart(2,"0")}/${String(M).padStart(2,"0")}`;
+}
+function daysElapsed(monthKey){
+  const t = todayKey();
+  const [Y,M] = monthKey.split("-").map(Number);
+  const [ty,tm,td] = t.split("-").map(Number);
+  if(Y===ty && M===tm) return td;
+  return new Date(Y, M, 0).getDate(); // days in that month
+}
+function genPin(){ return String(Math.floor(100000 + Math.random()*900000)); }
+function genId(prefix){ return prefix + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+function withTimeout(promise, ms, label){
+  return Promise.race([
+    promise,
+    new Promise((_,rej)=> setTimeout(()=>rej(new Error((label||"request")+" timed out")), ms))
+  ]);
+}
+
+/* category color palette — muted, ledger-appropriate, stable by index */
+const CAT_COLORS = ["#1E4A3B","#A9822F","#3E5C6E","#8A4B2F","#5E4A6B","#6E6A2E","#2E6E63","#9C4A52","#4A6E3E","#7A5A2E"];
+function catColor(index){ return CAT_COLORS[((index%CAT_COLORS.length)+CAT_COLORS.length)%CAT_COLORS.length]; }
+function hexToRgba(hex, a){
+  const n = parseInt(hex.slice(1),16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+
+const DEFAULT_CATEGORIES = [
+  "Ăn uống","Đi lại","Hóa đơn & tiện ích","Con cái","Sức khỏe","Mua sắm","Nhà cửa","Khác"
+];
+const LS_CONFIG = "sct_firebase_config";
+const LS_FAMILY = "sct_family_id";
+
+const BAKED_CONFIG = {
+  apiKey: "AIzaSyAbIua_5OGfNH-0pf3NChaKOebkLMSjtvA",
+  authDomain: "spending-38769.firebaseapp.com",
+  databaseURL: "https://spending-38769-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "spending-38769",
+  storageBucket: "spending-38769.firebasestorage.app",
+  messagingSenderId: "420673820906",
+  appId: "1:420673820906:web:b4ee0f23087a42c80d9f93"
+};
+
+/* ---------------- icons ---------------- */
+const svg = (props, ...kids) => h("svg", Object.assign({ fill:"none", stroke:"currentColor", strokeWidth:1.8, strokeLinecap:"round", strokeLinejoin:"round", viewBox:"0 0 24 24" }, props), ...kids);
+function IconChevron({ dir="left", size=20 }){ return svg({ width:size, height:size, strokeWidth:2.2 }, h("polyline",{ points: dir==="left"?"15 18 9 12 15 6": dir==="right"?"9 18 15 12 9 6": dir==="down"?"6 9 12 15 18 9":"18 15 12 9 6 15" })); }
+function IconPlus({ size=20 }){ return svg({ width:size, height:size, strokeWidth:2.2 }, h("line",{x1:12,y1:5,x2:12,y2:19}), h("line",{x1:5,y1:12,x2:19,y2:12})); }
+function IconPencil({ size=16, color="currentColor" }){ return svg({ width:size, height:size, stroke:color }, h("path",{d:"M12 20h9"}), h("path",{d:"M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"})); }
+function IconTrash({ size=16, color="currentColor" }){ return svg({ width:size, height:size, stroke:color }, h("path",{d:"M3 6h18"}), h("path",{d:"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"}), h("path",{d:"M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"})); }
+function IconBook({ size=20 }){ return svg({ width:size, height:size }, h("path",{d:"M4 19.5A2.5 2.5 0 0 1 6.5 17H20"}), h("path",{d:"M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"})); }
+function IconPie({ size=20 }){ return svg({ width:size, height:size }, h("path",{d:"M21.21 15.89A10 10 0 1 1 8 2.83"}), h("path",{d:"M22 12A10 10 0 0 0 12 2v10z"})); }
+function IconTag({ size=20 }){ return svg({ width:size, height:size }, h("path",{d:"M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"}), h("line",{x1:7,y1:7,x2:7.01,y2:7})); }
+function IconUsers({ size=20 }){ return svg({ width:size, height:size }, h("path",{d:"M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"}), h("circle",{cx:9,cy:7,r:4}), h("path",{d:"M23 21v-2a4 4 0 0 0-3-3.87"}), h("path",{d:"M16 3.13a4 4 0 0 1 0 7.75"})); }
+function IconReceipt({ size=28 }){ return svg({ width:size, height:size, strokeWidth:1.5 }, h("path",{d:"M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1z"}), h("line",{x1:8,y1:8,x2:16,y2:8}), h("line",{x1:8,y1:12,x2:16,y2:12})); }
+function IconKey({ size=22 }){ return svg({ width:size, height:size }, h("path",{d:"M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"})); }
+
+/* ---------------- shared primitives ---------------- */
+function PrimaryButton({ children, onClick, disabled, tone="pine", full=true, type="button" }){
+  const bg = tone==="clay" ? "var(--clay)" : "var(--pine)";
+  return h("button", {
+    type, disabled, onClick,
+    className:"press inline-flex items-center justify-center gap-2 rounded-2xl py-3.5 px-5 font-semibold text-white disabled:opacity-40 " + (full?"w-full":""),
+    style:{ background:bg, fontSize:"15px" }
+  }, children);
+}
+function GhostButton({ children, onClick, full=false }){
+  return h("button", {
+    onClick,
+    className:"press inline-flex items-center justify-center gap-2 rounded-2xl py-3.5 px-5 font-semibold " + (full?"w-full":""),
+    style:{ background:"transparent", border:"1px solid var(--line)", color:"var(--ink)", fontSize:"15px" }
+  }, children);
+}
+function IconButton({ label, onClick, children }){
+  return h("button", { "aria-label":label, title:label, onClick, className:"press p-2 rounded-xl", style:{ background:"transparent" } }, children);
+}
+
+/* ---------------- Firebase bootstrap screen ---------------- */
+function CenterShell({ children }){
+  return h("div", { className:"min-h-screen flex items-center justify-center p-5 canvas" },
+    h("div", { className:"w-full max-w-md rise" }, children));
+}
+
+function ConfigScreen({ onSaved }){
+  const [text, setText] = useState("");
+  const [error, setError] = useState("");
+  function save(){
+    let cfg;
+    try{ cfg = JSON.parse(text); }
+    catch(e){
+      try{
+        let cleaned = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+        const anchor = cleaned.search(/apiKey/);
+        if(anchor === -1) throw new Error("no apiKey found");
+        const braceStart = cleaned.lastIndexOf("{", anchor);
+        if(braceStart === -1) throw new Error("no opening brace");
+        let depth = 0, braceEnd = -1;
+        for(let i=braceStart; i<cleaned.length; i++){
+          if(cleaned[i] === "{") depth++;
+          else if(cleaned[i] === "}"){ depth--; if(depth===0){ braceEnd = i; break; } }
+        }
+        if(braceEnd === -1) throw new Error("no matching closing brace");
+        cfg = new Function("return (" + cleaned.slice(braceStart, braceEnd+1) + ")")();
+        if(typeof cfg !== "object" || cfg === null) throw new Error("not an object");
+      }catch(e2){ setError("Không đọc được cấu hình. Hãy dán đúng đối tượng firebaseConfig (từ Firebase console)."); return; }
+    }
+    if(!cfg.apiKey || !cfg.databaseURL){ setError("Thiếu apiKey hoặc databaseURL trong cấu hình."); return; }
+    localStorage.setItem(LS_CONFIG, JSON.stringify(cfg));
+    onSaved(cfg);
+  }
+  return h(CenterShell, null,
+    h("div", { className:"card p-6" },
+      h("h1", { className:"font-display text-2xl font-semibold mb-1", style:{color:"var(--ink)"} }, "Kết nối Firebase"),
+      h("p", { className:"text-sm mb-4", style:{color:"var(--ink-soft)"} }, "Dán cấu hình Firebase (firebaseConfig) của dự án bạn dùng cho sổ chi tiêu. Thông tin này chỉ lưu trên máy này."),
+      h("textarea", { className:"field font-mono", style:{height:"160px", fontSize:"12px"}, placeholder:'{ "apiKey": "…", "databaseURL": "…" }', value:text, onChange:e=>setText(e.target.value) }),
+      error && h("p", { className:"text-sm mt-2", style:{color:"var(--clay)"} }, error),
+      h("div", { className:"mt-4" }, h(PrimaryButton, { onClick:save }, "Lưu & tiếp tục"))
+    )
+  );
+}
+
+/* ---------------- Family gate ---------------- */
+function FamilyGateScreen({ db, uid, onFamilyReady }){
+  const [mode, setMode] = useState(null);
+  const [pin, setPin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [createdPin, setCreatedPin] = useState(null);
+  const [familyId, setFamilyId] = useState(null);
+
+  async function createFamily(){
+    setBusy(true); setError("");
+    try{
+      const fid = genId("fam");
+      const p = genPin();
+      await withTimeout(set(ref(db, `families/${fid}/members/${uid}`), true), 6000, "tạo gia đình");
+      await withTimeout(set(ref(db, `families/${fid}/categories`),
+        DEFAULT_CATEGORIES.reduce((acc,name,i)=>{ acc[genId("cat")] = { name, order:i }; return acc; }, {})
+      ), 6000, "tạo danh mục mặc định");
+      await withTimeout(set(ref(db, `pins/${p}`), { familyId: fid }), 6000, "tạo mã PIN");
+      setCreatedPin(p); setFamilyId(fid);
+    }catch(e){ setError("Không tạo được gia đình: " + e.message); }
+    finally{ setBusy(false); }
+  }
+  async function joinFamily(){
+    if(pin.trim().length < 4){ setError("Nhập mã PIN hợp lệ."); return; }
+    setBusy(true); setError("");
+    try{
+      const snap = await withTimeout(get(ref(db, `pins/${pin.trim()}`)), 6000, "tra cứu mã PIN");
+      if(!snap.exists()){ setError("Không tìm thấy mã PIN này, hoặc đã được dùng."); setBusy(false); return; }
+      const fid = snap.val().familyId;
+      await withTimeout(set(ref(db, `families/${fid}/members/${uid}`), true), 6000, "tham gia gia đình");
+      await withTimeout(remove(ref(db, `pins/${pin.trim()}`)), 6000, "vô hiệu mã PIN");
+      localStorage.setItem(LS_FAMILY, fid);
+      onFamilyReady(fid);
+    }catch(e){ setError("Không tham gia được: " + e.message); }
+    finally{ setBusy(false); }
+  }
+  function finishCreate(){ localStorage.setItem(LS_FAMILY, familyId); onFamilyReady(familyId); }
+
+  if(createdPin){
+    return h(CenterShell, null,
+      h("div", { className:"card p-7 text-center" },
+        h("div", { className:"inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4", style:{ background:"var(--pine-soft)", color:"var(--pine)" } }, h(IconKey,{size:26})),
+        h("p", { className:"label mb-3" }, "Mã mời · dùng một lần"),
+        h("div", { className:"font-mono font-semibold mb-4 tracking-[0.2em]", style:{ fontSize:"38px", color:"var(--pine)" } }, createdPin),
+        h("p", { className:"text-sm mb-6", style:{color:"var(--ink-soft)"} }, "Gửi mã này cho vợ/chồng để cùng dùng chung sổ. Mã hết hạn ngay sau khi được dùng."),
+        h(PrimaryButton, { onClick:finishCreate }, "Vào sổ chi tiêu")
+      )
+    );
+  }
+  if(mode === "join"){
+    return h(CenterShell, null,
+      h("div", { className:"card p-7" },
+        h("h1", { className:"font-display text-2xl font-semibold mb-1" }, "Tham gia gia đình"),
+        h("p", { className:"text-sm mb-5", style:{color:"var(--ink-soft)"} }, "Nhập mã PIN được chia sẻ với bạn."),
+        h("input", { className:"field font-mono text-center", style:{fontSize:"26px", letterSpacing:"0.25em"}, maxLength:6, inputMode:"numeric", placeholder:"••••••", value:pin, onChange:e=>setPin(e.target.value.replace(/\D/g,"")) }),
+        error && h("p", { className:"text-sm mt-3", style:{color:"var(--clay)"} }, error),
+        h("div", { className:"mt-5 space-y-2.5" },
+          h(PrimaryButton, { onClick:joinFamily, disabled:busy }, busy ? "Đang xử lý…" : "Tham gia"),
+          h("button", { className:"press w-full py-2 text-sm font-medium", style:{color:"var(--ink-soft)"}, onClick:()=>{setMode(null); setError("");} }, "Quay lại")
+        )
+      )
+    );
+  }
+  return h(CenterShell, null,
+    h("div", { className:"card p-7" },
+      h("div", { className:"inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-5", style:{ background:"var(--pine)", color:"#fff" } }, h(IconBook,{size:26})),
+      h("h1", { className:"font-display text-3xl font-semibold mb-2 leading-tight" }, "Sổ Chi Tiêu\nGia Đình"),
+      h("p", { className:"text-sm mb-6", style:{color:"var(--ink-soft)"} }, "Tạo sổ mới để bắt đầu, hoặc tham gia sổ đã có bằng mã PIN."),
+      error && h("p", { className:"text-sm mb-3", style:{color:"var(--clay)"} }, error),
+      h("div", { className:"space-y-2.5" },
+        h(PrimaryButton, { onClick:createFamily, disabled:busy }, busy ? "Đang tạo…" : "Tạo sổ mới"),
+        h(GhostButton, { onClick:()=>setMode("join"), full:true }, "Tham gia bằng mã PIN")
+      )
+    )
+  );
+}
+
+/* ---------------- month navigator ---------------- */
+function MonthNav({ monthKey, onChange }){
+  const isCurrent = monthKey === monthKeyOf(todayKey());
+  return h("div", { className:"flex items-center justify-between px-4 pt-3 pb-3" },
+    h("button", { className:"press p-2 -ml-2 rounded-xl", style:{color:"var(--ink-soft)"}, onClick:()=>onChange(shiftMonthKey(monthKey,-1)), "aria-label":"Tháng trước" }, h(IconChevron,{dir:"left"})),
+    h("div", { className:"font-display text-[19px] font-semibold", style:{color:"var(--ink)"} }, monthLabel(monthKey)),
+    h("button", { className:"press p-2 -mr-2 rounded-xl disabled:opacity-25", style:{color:"var(--ink-soft)"}, disabled:isCurrent, onClick:()=>onChange(shiftMonthKey(monthKey,1)), "aria-label":"Tháng sau" }, h(IconChevron,{dir:"right"}))
+  );
+}
+
+/* ---------------- category chip ---------------- */
+function CatChip({ name, color }){
+  const c = color || "#8A8A7A";
+  return h("span", { className:"inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium max-w-[160px]", style:{ background:hexToRgba(c,0.10), color:c } },
+    h("span", { className:"w-1.5 h-1.5 rounded-full shrink-0", style:{ background:c } }),
+    h("span", { className:"truncate" }, name || "—")
+  );
+}
+
+/* ---------------- entry row ---------------- */
+function EntryRow({ entry, categoryName, categoryColor, onEdit, onDelete }){
+  return h("div", { className:"group py-3" },
+    h("div", { className:"flex items-baseline gap-1" },
+      h("span", { className:"font-medium truncate", style:{fontSize:"15px"} }, entry.item || "(không mô tả)"),
+      h("div", { className:"leader" }),
+      h("span", { className:"font-mono font-semibold whitespace-nowrap", style:{fontSize:"15px", color:"var(--ink)"} }, formatVND(entry.amount))
+    ),
+    h("div", { className:"flex items-center justify-between gap-2 mt-1.5" },
+      h(CatChip, { name:categoryName, color:categoryColor }),
+      h("div", { className:"flex items-center gap-0.5 shrink-0" },
+        h(IconButton, { label:"Sửa", onClick:()=>onEdit(entry) }, h(IconPencil,{color:"var(--ink-soft)"})),
+        h(IconButton, { label:"Xóa", onClick:()=>onDelete(entry) }, h(IconTrash,{color:"var(--clay)"}))
+      )
+    )
+  );
+}
+
+/* ---------------- entry form ---------------- */
+function EntryForm({ categories, catIndex, initial, onSubmit, onCancel }){
+  const [item, setItem] = useState(initial?.item || "");
+  const [categoryId, setCategoryId] = useState(initial?.categoryId || (categories[0]?.id || ""));
+  const [amountStr, setAmountStr] = useState(initial ? String(initial.amount) : "");
+  const [date, setDate] = useState(initial?.date || todayKey());
+  const [error, setError] = useState("");
+  function submit(e){
+    e.preventDefault();
+    const amount = parseAmountInput(amountStr);
+    if(!item.trim()){ setError("Nhập tên khoản chi."); return; }
+    if(!categoryId){ setError("Chọn danh mục."); return; }
+    if(amount <= 0){ setError("Nhập số tiền hợp lệ."); return; }
+    onSubmit({ item: item.trim(), categoryId, amount, date });
+  }
+  return h("form", { onSubmit:submit, className:"card p-4 rise", style:{ borderColor:"var(--pine)", boxShadow:"0 4px 20px -8px rgba(30,74,59,0.25)" } },
+    h("div", { className:"mb-3.5" },
+      h("div", { className:"label mb-1.5" }, "Số tiền"),
+      h("div", { className:"flex items-center rounded-2xl px-4 py-1", style:{ background:"var(--pine-soft)" } },
+        h("input", { className:"font-mono font-bold bg-transparent flex-1 min-w-0 py-2", style:{ fontSize:"30px", color:"var(--pine)", border:"none", boxShadow:"none", outline:"none" }, inputMode:"numeric", placeholder:"0", autoFocus:!initial, value: amountStr ? formatPlain(parseAmountInput(amountStr)) : "", onChange:e=>setAmountStr(e.target.value) }),
+        h("span", { className:"font-mono font-semibold pl-2", style:{ fontSize:"20px", color:hexToRgba("#1E4A3B",0.5) } }, "₫")
+      )
+    ),
+    h("div", { className:"mb-3.5" },
+      h("div", { className:"label mb-1.5" }, "Khoản chi"),
+      h("input", { className:"field", placeholder:"VD: Cà phê sáng, tiền điện…", value:item, onChange:e=>setItem(e.target.value) })
+    ),
+    h("div", { className:"grid grid-cols-2 gap-3 mb-1" },
+      h("div", null,
+        h("div", { className:"label mb-1.5" }, "Danh mục"),
+        h("select", { className:"field", value:categoryId, onChange:e=>setCategoryId(e.target.value) },
+          categories.map(c=> h("option",{ key:c.id, value:c.id }, c.name)))
+      ),
+      h("div", null,
+        h("div", { className:"label mb-1.5" }, "Ngày"),
+        h("input", { type:"date", className:"field", value:date, onChange:e=>setDate(e.target.value) })
+      )
+    ),
+    error && h("p", { className:"text-sm mt-2", style:{color:"var(--clay)"} }, error),
+    h("div", { className:"flex gap-2.5 mt-4" },
+      h(PrimaryButton, { type:"submit", onClick:()=>{} }, initial ? "Lưu thay đổi" : "Thêm khoản chi"),
+      onCancel && h("button", { type:"button", onClick:onCancel, className:"press px-5 rounded-2xl font-semibold", style:{ border:"1px solid var(--line)", color:"var(--ink-soft)" } }, "Hủy")
+    )
+  );
+}
+
+/* ---------------- LOG TAB ---------------- */
+function LogTab({ categories, entries, monthKey, onAdd, onUpdate, onDelete }){
+  const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const catMeta = useMemo(()=>{
+    const m = {};
+    categories.forEach((c,i)=>{ m[c.id] = { name:c.name, color:catColor(i) }; });
+    return m;
+  }, [categories]);
+
+  const monthEntries = useMemo(()=>
+    entries.filter(e=> monthKeyOf(e.date) === monthKey)
+      .sort((a,b)=> b.date.localeCompare(a.date) || (b.createdAt||0)-(a.createdAt||0))
+  , [entries, monthKey]);
+
+  const total = monthEntries.reduce((s,e)=> s+Number(e.amount||0), 0);
+  const days = daysElapsed(monthKey);
+  const avg = days>0 ? total/days : 0;
+
+  // group by day
+  const groups = useMemo(()=>{
+    const g = [];
+    const byDay = {};
+    for(const e of monthEntries){
+      if(!byDay[e.date]){ byDay[e.date] = { date:e.date, items:[], total:0 }; g.push(byDay[e.date]); }
+      byDay[e.date].items.push(e); byDay[e.date].total += Number(e.amount||0);
+    }
+    return g;
+  }, [monthEntries]);
+
+  return h("div", { className:"px-4 pb-28" },
+    // HERO
+    h("div", { className:"card px-5 pt-5 pb-4 mb-4", style:{ background:"var(--pine)", border:"none" } },
+      h("div", { className:"label mb-2", style:{ color:"rgba(255,255,255,0.65)" } }, "Đã chi " + monthLabel(monthKey).replace(" · ", " · ")),
+      h("div", { className:"font-mono font-bold leading-none", style:{ color:"#fff", fontSize:"clamp(30px,9vw,42px)" } }, formatVND(total)),
+      h("div", { className:"brass-rule my-3.5", style:{ opacity:0.85 } }),
+      h("div", { className:"flex items-center justify-between", style:{ color:"rgba(255,255,255,0.8)" } },
+        h("span", { className:"text-[13px]" }, `${monthEntries.length} khoản chi`),
+        h("span", { className:"text-[13px] font-mono" }, `TB ${formatVND(avg)}/ngày`)
+      )
+    ),
+    // ADD
+    adding
+      ? h(EntryForm, { categories, initial:null,
+          onSubmit:(vals)=>{ onAdd(vals); setAdding(false); },
+          onCancel:()=>setAdding(false) })
+      : h("button", { className:"press w-full flex items-center justify-center gap-2 rounded-2xl py-3.5 mb-4 font-semibold text-white", style:{ background:"var(--pine)", fontSize:"15px" }, onClick:()=>{ setAdding(true); setEditing(null); } },
+          h(IconPlus,{size:18}), "Ghi khoản chi"),
+    // LIST grouped by day
+    groups.length === 0
+      ? h("div", { className:"card-flat flex flex-col items-center text-center py-12 px-6" },
+          h("div", { style:{color:"var(--ink-faint)"}, className:"mb-3" }, h(IconReceipt,{size:30})),
+          h("p", { className:"font-medium mb-1", style:{color:"var(--ink)"} }, "Chưa có khoản chi nào"),
+          h("p", { className:"text-sm", style:{color:"var(--ink-soft)"} }, "Nhấn “Ghi khoản chi” để bắt đầu ghi sổ tháng này.")
+        )
+      : groups.map(g => h("div", { key:g.date, className:"mb-3" },
+          h("div", { className:"flex items-center justify-between px-1 mb-1" },
+            h("span", { className:"text-[13px] font-semibold", style:{color:"var(--ink-soft)"} }, friendlyDay(g.date)),
+            h("span", { className:"text-[13px] font-mono font-medium", style:{color:"var(--ink-faint)"} }, formatVND(g.total))
+          ),
+          h("div", { className:"card px-4 py-1" },
+            g.items.map((e,idx) => h("div", { key:e.id },
+              idx>0 && h("div", { className:"hairline" }),
+              editing && editing.id === e.id
+                ? h("div", { className:"py-3" }, h(EntryForm, { categories, initial:editing,
+                    onSubmit:(vals)=>{ onUpdate(editing.id, vals); setEditing(null); },
+                    onCancel:()=>setEditing(null) }))
+                : h(EntryRow, { entry:e, categoryName:catMeta[e.categoryId]?.name, categoryColor:catMeta[e.categoryId]?.color,
+                    onEdit:(ent)=>{ setEditing(ent); setAdding(false); },
+                    onDelete:(ent)=>{ if(confirm(`Xóa “${ent.item}”?`)) onDelete(ent.id); } })
+            ))
+          )
+        ))
+  );
+}
+
+/* ---------------- CATEGORIES TAB ---------------- */
+function CategoriesTab({ categories, entries, monthKey, onUpdate, onDelete }){
+  const [openCat, setOpenCat] = useState(null);
+  const [sortMode, setSortMode] = useState("amount");
+  const [editing, setEditing] = useState(null);
+
+  const catIdx = useMemo(()=>{ const m={}; categories.forEach((c,i)=>m[c.id]=i); return m; }, [categories]);
+  const monthEntries = useMemo(()=> entries.filter(e=> monthKeyOf(e.date) === monthKey), [entries, monthKey]);
+
+  const byCategory = useMemo(()=>{
+    const map = {};
+    categories.forEach((c,i)=>{ map[c.id] = { id:c.id, name:c.name, color:catColor(i), total:0, items:[] }; });
+    for(const e of monthEntries){
+      if(!map[e.categoryId]) map[e.categoryId] = { id:e.categoryId, name:"(đã xóa)", color:"#8A8A7A", total:0, items:[] };
+      map[e.categoryId].total += Number(e.amount||0);
+      map[e.categoryId].items.push(e);
+    }
+    return map;
+  }, [categories, monthEntries]);
+
+  const rows = Object.values(byCategory).filter(r=> r.items.length>0).sort((a,b)=> b.total-a.total);
+  const grandTotal = rows.reduce((s,r)=>s+r.total,0);
+
+  if(rows.length === 0){
+    return h("div", { className:"px-4 pb-28" },
+      h("div", { className:"card-flat flex flex-col items-center text-center py-12 px-6" },
+        h("div", { style:{color:"var(--ink-faint)"}, className:"mb-3" }, h(IconPie,{size:30})),
+        h("p", { className:"font-medium mb-1" }, "Chưa có dữ liệu"),
+        h("p", { className:"text-sm", style:{color:"var(--ink-soft)"} }, "Ghi vài khoản chi để xem phân tích theo danh mục.")
+      )
+    );
+  }
+
+  return h("div", { className:"px-4 pb-28" },
+    // composition bar
+    h("div", { className:"card px-4 py-4 mb-4" },
+      h("div", { className:"label mb-2.5" }, "Cơ cấu chi tiêu"),
+      h("div", { className:"flex w-full h-3 rounded-full overflow-hidden", style:{ background:"var(--surface-2)" } },
+        rows.map(r => h("div", { key:r.id, style:{ width:(grandTotal? (r.total/grandTotal*100):0)+"%", background:r.color } }))
+      ),
+      h("div", { className:"mt-3 font-mono font-bold", style:{ fontSize:"22px", color:"var(--ink)" } }, formatVND(grandTotal))
+    ),
+    // category cards
+    rows.map(data => {
+      const isOpen = openCat === data.id;
+      const pct = grandTotal ? Math.round((data.total/grandTotal)*100) : 0;
+      const items = [...data.items].sort((a,b)=> sortMode==="date" ? b.date.localeCompare(a.date) : Number(b.amount)-Number(a.amount));
+      return h("div", { key:data.id, className:"card mb-2.5 overflow-hidden" },
+        h("button", { className:"press w-full flex items-center gap-3 p-4 text-left", onClick:()=>setOpenCat(isOpen?null:data.id) },
+          h("span", { className:"w-2.5 h-2.5 rounded-full shrink-0", style:{ background:data.color } }),
+          h("div", { className:"flex-1 min-w-0" },
+            h("div", { className:"flex items-baseline justify-between gap-2" },
+              h("span", { className:"font-semibold truncate", style:{fontSize:"15px"} }, data.name),
+              h("span", { className:"font-mono font-semibold whitespace-nowrap", style:{fontSize:"15px"} }, formatVND(data.total))
+            ),
+            h("div", { className:"flex items-center gap-2 mt-2" },
+              h("div", { className:"flex-1 h-1.5 rounded-full overflow-hidden", style:{ background:"var(--surface-2)" } },
+                h("div", { className:"h-full rounded-full", style:{ width:pct+"%", background:data.color } })),
+              h("span", { className:"text-xs shrink-0", style:{color:"var(--ink-soft)"} }, `${pct}% · ${data.items.length} khoản`)
+            )
+          ),
+          h("span", { className:"shrink-0 press", style:{ color:"var(--ink-faint)", transform:isOpen?"rotate(180deg)":"none", transition:"transform .2s" } }, h(IconChevron,{dir:"down",size:18}))
+        ),
+        isOpen && h("div", { className:"px-4 pb-2 fade" },
+          h("div", { className:"hairline mb-1" }),
+          h("div", { className:"flex items-center justify-end gap-1.5 py-2.5" },
+            h("span", { className:"text-xs mr-1", style:{color:"var(--ink-faint)"} }, "Sắp xếp"),
+            ["amount","date"].map(m => h("button", { key:m, className:"press text-xs px-2.5 py-1 rounded-full font-medium",
+              style: sortMode===m ? {background:"var(--pine)", color:"#fff"} : {background:"var(--surface-2)", color:"var(--ink-soft)"},
+              onClick:()=>setSortMode(m) }, m==="amount"?"Số tiền":"Ngày"))
+          ),
+          items.map((e,idx)=> h("div", { key:e.id },
+            idx>0 && h("div", { className:"hairline" }),
+            editing && editing.id === e.id
+              ? h("div", { className:"py-3" }, h(EntryForm, { categories, initial:editing,
+                  onSubmit:(vals)=>{ onUpdate(editing.id, vals); setEditing(null); }, onCancel:()=>setEditing(null) }))
+              : h(EntryRow, { entry:e, categoryName:data.name, categoryColor:data.color,
+                  onEdit:(ent)=>setEditing(ent),
+                  onDelete:(ent)=>{ if(confirm(`Xóa “${ent.item}”?`)) onDelete(ent.id); } })
+          ))
+        )
+      );
+    })
+  );
+}
+
+/* ---------------- MANAGE TAB ---------------- */
+function ManageTab({ categories, onAdd, onRename, onDelete }){
+  const [newName, setNewName] = useState("");
+  const [renaming, setRenaming] = useState(null);
+  const [renameVal, setRenameVal] = useState("");
+  return h("div", { className:"px-4 pb-28" },
+    h("div", { className:"card p-4 mb-4" },
+      h("div", { className:"label mb-1.5" }, "Thêm danh mục"),
+      h("div", { className:"flex gap-2.5" },
+        h("input", { className:"field", placeholder:"VD: Du lịch", value:newName, onChange:e=>setNewName(e.target.value),
+          onKeyDown:e=>{ if(e.key==="Enter" && newName.trim()){ onAdd(newName.trim()); setNewName(""); } } }),
+        h("button", { className:"press shrink-0 rounded-2xl px-4 font-semibold text-white flex items-center", style:{background:"var(--pine)"}, onClick:()=>{ if(newName.trim()){ onAdd(newName.trim()); setNewName(""); } } }, h(IconPlus,{size:18}))
+      )
+    ),
+    h("div", { className:"card px-4 py-1" },
+      categories.length===0
+        ? h("p", { className:"text-sm text-center py-8", style:{color:"var(--ink-soft)"} }, "Chưa có danh mục nào.")
+        : categories.map((c,i)=> h("div", { key:c.id },
+            i>0 && h("div", { className:"hairline" }),
+            h("div", { className:"flex items-center gap-3 py-3" },
+              h("span", { className:"w-2.5 h-2.5 rounded-full shrink-0", style:{ background:catColor(i) } }),
+              renaming === c.id
+                ? h("input", { className:"field flex-1", value:renameVal, onChange:e=>setRenameVal(e.target.value), autoFocus:true,
+                    onKeyDown:e=>{ if(e.key==="Enter" && renameVal.trim()){ onRename(c.id, renameVal.trim()); setRenaming(null); } } })
+                : h("span", { className:"flex-1 font-medium truncate", style:{fontSize:"15px"} }, c.name),
+              renaming === c.id
+                ? h("div", { className:"flex items-center gap-1.5 shrink-0" },
+                    h("button", { className:"press text-sm font-semibold px-3 py-1.5 rounded-xl text-white", style:{background:"var(--pine)"}, onClick:()=>{ if(renameVal.trim()) onRename(c.id, renameVal.trim()); setRenaming(null); } }, "Lưu"),
+                    h("button", { className:"press text-sm px-2 py-1.5", style:{color:"var(--ink-soft)"}, onClick:()=>setRenaming(null) }, "Hủy"))
+                : h("div", { className:"flex items-center gap-0.5 shrink-0" },
+                    h(IconButton, { label:"Đổi tên", onClick:()=>{ setRenaming(c.id); setRenameVal(c.name); } }, h(IconPencil,{color:"var(--ink-soft)"})),
+                    h(IconButton, { label:"Xóa", onClick:()=>{ if(confirm(`Xóa danh mục “${c.name}”? Các khoản chi cũ vẫn giữ nguyên nhưng sẽ hiện “(đã xóa)”.`)) onDelete(c.id); } }, h(IconTrash,{color:"var(--clay)"})))
+            )
+          ))
+    )
+  );
+}
+
+/* ---------------- FAMILY TAB ---------------- */
+function FamilyTab({ db, familyId, uid, members }){
+  const [pin, setPin] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function generateInvite(){
+    setBusy(true); setError("");
+    try{ const p = genPin(); await withTimeout(set(ref(db, `pins/${p}`), { familyId }), 6000, "tạo mã mời"); setPin(p); }
+    catch(e){ setError("Không tạo được mã: "+e.message); }
+    finally{ setBusy(false); }
+  }
+  async function revoke(memberUid){
+    if(memberUid === uid){ alert("Bạn không thể tự xóa chính mình khỏi sổ."); return; }
+    if(!confirm("Thu hồi quyền truy cập của thành viên này?")) return;
+    try{ await withTimeout(remove(ref(db, `families/${familyId}/members/${memberUid}`)), 6000, "thu hồi quyền"); }
+    catch(e){ alert("Lỗi: "+e.message); }
+  }
+  const memberKeys = Object.keys(members);
+  return h("div", { className:"px-4 pb-28" },
+    h("div", { className:"card p-5 mb-4" },
+      h("h2", { className:"font-display text-lg font-semibold mb-1" }, "Mời thành viên"),
+      h("p", { className:"text-sm mb-4", style:{color:"var(--ink-soft)"} }, "Tạo mã PIN dùng một lần để mời vợ/chồng cùng dùng sổ chung."),
+      pin
+        ? h("div", { className:"rounded-2xl py-5 text-center", style:{ background:"var(--pine-soft)" } },
+            h("div", { className:"font-mono font-semibold tracking-[0.2em] mb-1", style:{ fontSize:"32px", color:"var(--pine)" } }, pin),
+            h("p", { className:"text-xs", style:{color:"var(--ink-soft)"} }, "Hết hạn ngay khi được dùng."))
+        : h(PrimaryButton, { onClick:generateInvite, disabled:busy }, busy ? "Đang tạo…" : "Tạo mã mời"),
+      error && h("p", { className:"text-sm mt-3", style:{color:"var(--clay)"} }, error)
+    ),
+    h("div", { className:"card px-4 py-1" },
+      h("div", { className:"label px-1 pt-3 pb-1" }, `Thành viên · ${memberKeys.length}`),
+      memberKeys.length === 0
+        ? h("p", { className:"text-sm py-4 px-1", style:{color:"var(--ink-soft)"} }, "Chưa có dữ liệu.")
+        : memberKeys.map((m,i)=> h("div", { key:m },
+            i>0 && h("div", { className:"hairline" }),
+            h("div", { className:"flex items-center gap-3 py-3" },
+              h("span", { className:"inline-flex items-center justify-center w-9 h-9 rounded-full shrink-0 font-semibold text-white", style:{ background: m===uid?"var(--pine)":"var(--brass)", fontSize:"13px" } }, m===uid?"Bạn":"TV"),
+              h("div", { className:"flex-1 min-w-0" },
+                h("div", { className:"font-medium text-[14px]" }, m===uid ? "Thiết bị này" : "Thành viên"),
+                h("div", { className:"font-mono text-xs truncate", style:{color:"var(--ink-faint)"} }, m.slice(0,16)+"…")),
+              m !== uid && h("button", { className:"press text-xs px-3 py-1.5 rounded-full font-semibold shrink-0", style:{background:"var(--clay-soft)", color:"var(--clay)"}, onClick:()=>revoke(m) }, "Thu hồi")
+            )
+          ))
+    )
+  );
+}
+
+/* ---------------- shell ---------------- */
+const TABS = [
+  { key:"log", label:"Ghi chép", Icon:IconBook },
+  { key:"categories", label:"Danh mục", Icon:IconPie },
+  { key:"manage", label:"Quản lý", Icon:IconTag },
+  { key:"family", label:"Gia đình", Icon:IconUsers },
+];
+
+function MainApp({ db, familyId, uid }){
+  const [tab, setTab] = useState("log");
+  const [monthKey, setMonthKey] = useState(monthKeyOf(todayKey()));
+  const [categories, setCategories] = useState([]);
+  const [entries, setEntries] = useState([]);
+  const [members, setMembers] = useState({});
+
+  useEffect(()=>{
+    const unsubCat = onValue(ref(db, `families/${familyId}/categories`), snap => {
+      const val = snap.val() || {};
+      const list = Object.entries(val).map(([id,v])=>({ id, name:v.name, order:v.order||0 }));
+      list.sort((a,b)=> a.order-b.order);
+      setCategories(list);
+    });
+    const unsubExp = onValue(ref(db, `families/${familyId}/expenses`), snap => {
+      const val = snap.val() || {};
+      setEntries(Object.entries(val).map(([id,v])=>({ id, ...v })));
+    });
+    const unsubMem = onValue(ref(db, `families/${familyId}/members`), snap => setMembers(snap.val() || {}));
+    return ()=>{ unsubCat(); unsubExp(); unsubMem(); };
+  }, [db, familyId]);
+
+  const addEntry = useCallback((vals)=>{ const id=genId("exp"); set(ref(db,`families/${familyId}/expenses/${id}`),{...vals,createdAt:Date.now()}).catch(e=>alert("Lỗi lưu: "+e.message)); }, [db, familyId]);
+  const updateEntry = useCallback((id, vals)=>{ update(ref(db,`families/${familyId}/expenses/${id}`),{...vals,updatedAt:Date.now()}).catch(e=>alert("Lỗi cập nhật: "+e.message)); }, [db, familyId]);
+  const deleteEntry = useCallback((id)=>{ remove(ref(db,`families/${familyId}/expenses/${id}`)).catch(e=>alert("Lỗi xóa: "+e.message)); }, [db, familyId]);
+  const addCategory = useCallback((name)=>{ const id=genId("cat"); set(ref(db,`families/${familyId}/categories/${id}`),{name,order:categories.length}).catch(e=>alert("Lỗi: "+e.message)); }, [db, familyId, categories]);
+  const renameCategory = useCallback((id, name)=>{ update(ref(db,`families/${familyId}/categories/${id}`),{name}).catch(e=>alert("Lỗi: "+e.message)); }, [db, familyId]);
+  const deleteCategory = useCallback((id)=>{ remove(ref(db,`families/${familyId}/categories/${id}`)).catch(e=>alert("Lỗi: "+e.message)); }, [db, familyId]);
+
+  return h("div", { className:"min-h-screen canvas" },
+    h("div", { className:"sticky top-0 z-10 canvas", style:{ borderBottom:"1px solid var(--line)" } },
+      h("div", { className:"flex items-center justify-center pt-3.5" },
+        h("span", { style:{color:"var(--pine)"}, className:"mr-2" }, h(IconBook,{size:18})),
+        h("h1", { className:"font-display text-[17px] font-semibold tracking-wide", style:{color:"var(--ink)"} }, "Sổ Chi Tiêu Gia Đình")
+      ),
+      h(MonthNav, { monthKey, onChange:setMonthKey })
+    ),
+    h("div", { className:"pt-4" },
+      tab==="log" && h(LogTab, { categories, entries, monthKey, onAdd:addEntry, onUpdate:updateEntry, onDelete:deleteEntry }),
+      tab==="categories" && h(CategoriesTab, { categories, entries, monthKey, onUpdate:updateEntry, onDelete:deleteEntry }),
+      tab==="manage" && h(ManageTab, { categories, onAdd:addCategory, onRename:renameCategory, onDelete:deleteCategory }),
+      tab==="family" && h(FamilyTab, { db, familyId, uid, members })
+    ),
+    h("div", { className:"fixed bottom-0 left-0 right-0 flex justify-around", style:{ background:"var(--surface)", borderTop:"1px solid var(--line)", paddingBottom:"env(safe-area-inset-bottom)" } },
+      TABS.map(t => {
+        const active = tab===t.key;
+        return h("button", { key:t.key, onClick:()=>setTab(t.key), className:"press flex flex-col items-center gap-1 pt-2.5 pb-2.5 flex-1", style:{ color: active?"var(--pine)":"var(--ink-faint)" } },
+          h(t.Icon,{size:22}),
+          h("span", { className:"text-[11px]", style:{ fontWeight: active?600:500 } }, t.label)
+        );
+      })
+    )
+  );
+}
+
+/* ---------------- root ---------------- */
+function Root(){
+  const [config, setConfig] = useState(()=>{
+    if(BAKED_CONFIG) return BAKED_CONFIG;
+    const raw = localStorage.getItem(LS_CONFIG);
+    return raw ? JSON.parse(raw) : null;
+  });
+  const [db, setDb] = useState(null);
+  const [uid, setUid] = useState(null);
+  const [familyId, setFamilyId] = useState(()=> localStorage.getItem(LS_FAMILY));
+  const [authError, setAuthError] = useState("");
+
+  useEffect(()=>{
+    if(!config) return;
+    try{
+      const app = initializeApp(config);
+      const auth = getAuth(app);
+      const database = getDatabase(app);
+      setDb(database);
+      onAuthStateChanged(auth, user => {
+        if(user) setUid(user.uid);
+        else signInAnonymously(auth).catch(e=> setAuthError("Không đăng nhập được: "+e.message));
+      });
+    }catch(e){ setAuthError("Cấu hình Firebase không hợp lệ: "+e.message); }
+  }, [config]);
+
+  if(!config) return h(ConfigScreen, { onSaved:setConfig });
+  if(authError) return h("div", { className:"min-h-screen flex items-center justify-center p-6 text-center canvas", style:{color:"var(--clay)"} }, authError);
+  if(!db || !uid) return h("div", { className:"min-h-screen flex items-center justify-center canvas", style:{color:"var(--ink-soft)"} }, "Đang kết nối…");
+  if(!familyId) return h(FamilyGateScreen, { db, uid, onFamilyReady:setFamilyId });
+  return h(MainApp, { db, familyId, uid });
+}
+
+createRoot(document.getElementById("root")).render(h(Root));
+
+</script>
+</body>
+</html>
